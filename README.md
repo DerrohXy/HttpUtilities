@@ -27,16 +27,36 @@ client.SetHeaders(httputilities.Headers{
 - `ClearHeaders` wipes all default headers.
 - Every request method takes a `params Headers` argument that gets appended to the URL as a query string via `BuildPath`.
 
+### Return values
+
+Every request method (both package-level `Make...Request` functions and the
+`HttpClient` methods) returns three values: `(any, int, error)`.
+
+```go
+result, statusCode, err := client.Get("users/1", nil, true)
+```
+
+- **`result any`** — the response body, shaped by `parseJson` (see below).
+- **`statusCode int`** — the HTTP status code, e.g. `200`, `404`, `500`.
+  If the request never reached the server at all (DNS failure, connection
+  refused, request construction error, JSON marshal error, etc.), this is
+  `-1` instead of a real status code. Once a response is actually received,
+  `statusCode` reflects it even if a later step (e.g. decoding) fails.
+- **`error`** — non-nil on any failure, whether pre-request or post-response.
+
+Always check `err` before relying on `statusCode`/`result` — a `-1` status
+means "no response," not "status unknown but ok."
+
 ### The `parseJson` parameter
 
-Every request method takes a trailing `parseJson bool`:
+Every request method also takes a trailing `parseJson bool`:
 
-| `parseJson` | Return type                                        | Use when...                                        |
+| `parseJson` | `result` type                                      | Use when...                                        |
 | ----------- | -------------------------------------------------- | -------------------------------------------------- |
 | `true`      | `any` (decoded JSON — `map[string]any` or `[]any`) | you just want to inspect/log the response          |
 | `false`     | `[]byte` (raw body)                                | you want to decode into a specific struct yourself |
 
-Because every method returns `any`, you'll need a type assertion either way.
+Because `result` is always `any`, you'll need a type assertion either way.
 
 ### Example: raw `[]byte` → typed struct
 
@@ -61,9 +81,12 @@ func main() {
 	client := httputilities.NewHttpClient("https://api.example.com")
 
 	// parseJson = false -> get the raw response body
-	raw, err := client.GetJson("users/1", nil, false)
+	raw, status, err := client.Get("users/1", nil, false)
 	if err != nil {
-		log.Fatalf("request failed: %v", err)
+		log.Fatalf("request failed (status %d): %v", status, err)
+	}
+	if status < 200 || status >= 300 {
+		log.Fatalf("unexpected status: %d", status)
 	}
 
 	body, ok := raw.([]byte)
@@ -84,18 +107,18 @@ func main() {
 
 ```go
 // parseJson = true -> decode into map[string]any / []any for you
-parsed, err := client.GetJson("users/1", nil, true)
+parsed, status, err := client.Get("users/1", nil, true)
 if err != nil {
-    log.Fatalf("request failed: %v", err)
+    log.Fatalf("request failed (status %d): %v", status, err)
 }
 
-fmt.Printf("%+v\n", parsed) // map[string]any{"id":1, "name":"...", ...}
+fmt.Printf("status: %d, body: %+v\n", status, parsed)
 ```
 
 ### POST JSON
 
 ```go
-result, err := client.PostJson(
+result, status, err := client.PostJson(
     "users",
     httputilities.JSONObject{"name": "Ada", "email": "ada@example.com"},
     nil,   // no query params
@@ -106,7 +129,7 @@ result, err := client.PostJson(
 ### POST URL-encoded
 
 ```go
-result, err := client.PostUrlEncoded(
+result, status, err := client.PostUrlEncoded(
     "login",
     httputilities.JSONObject{"username": "ada", "password": "secret"},
     nil,
@@ -117,7 +140,7 @@ result, err := client.PostUrlEncoded(
 ### POST multipart form
 
 ```go
-result, err := client.PostForm(
+result, status, err := client.PostForm(
     "upload",
     httputilities.FormFields{"caption": "hello world"},
     nil,
@@ -133,7 +156,7 @@ If you don't need a persistent client (headers, base URL), the underlying
 functions are exported directly:
 
 ```go
-result, err := httputilities.MakeGetJsonRequest(
+result, status, err := httputilities.MakeGetJsonRequest(
     "https://api.example.com/users/1",
     httputilities.Headers{"Authorization": "Bearer token"},
     true,

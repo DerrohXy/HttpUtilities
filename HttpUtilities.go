@@ -22,14 +22,16 @@ type Headers map[string]string
 // File uploads are not supported; extend MakePostFormRequest if needed.
 type FormFields map[string]string
 
-func MakeGetJsonRequest(
+const NO_STATUS_CODE = -1
+
+func MakeGetRequest(
 	endpoint string,
 	headers Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 	applyHeaders(req, headers)
 
@@ -41,15 +43,15 @@ func MakePostJsonRequest(
 	data JSONObject,
 	headers Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	body, err := json.Marshal(data)
 	if err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 
 	merged := mergeHeaders(headers, Headers{"Content-Type": "application/json"})
@@ -63,22 +65,22 @@ func MakePostFormRequest(
 	data FormFields,
 	headers Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 
 	for key, value := range data {
 		if err := writer.WriteField(key, value); err != nil {
-			return nil, err
+			return nil, NO_STATUS_CODE, err
 		}
 	}
 	if err := writer.Close(); err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, &buf)
 	if err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 
 	merged := mergeHeaders(headers, Headers{"Content-Type": writer.FormDataContentType()})
@@ -92,7 +94,7 @@ func MakePostUrlEncodedRequest(
 	data JSONObject,
 	headers Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	values := url.Values{}
 	for key, value := range data {
 		values.Set(key, fmt.Sprintf("%v", value))
@@ -100,7 +102,7 @@ func MakePostUrlEncodedRequest(
 
 	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(values.Encode()))
 	if err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 
 	merged := mergeHeaders(headers, Headers{"Content-Type": "application/x-www-form-urlencoded"})
@@ -182,7 +184,7 @@ func (instance *HttpClient) PostJson(
 	data JSONObject,
 	params Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	fullPath := BuildPath(instance.HostOrigin, path, params)
 	return MakePostJsonRequest(fullPath, data, instance.Headers(), parseJson)
 }
@@ -192,7 +194,7 @@ func (instance *HttpClient) PostUrlEncoded(
 	data JSONObject,
 	params Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	fullPath := BuildPath(instance.HostOrigin, path, params)
 	return MakePostUrlEncodedRequest(fullPath, data, instance.Headers(), parseJson)
 }
@@ -202,18 +204,18 @@ func (instance *HttpClient) PostForm(
 	data FormFields,
 	params Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	fullPath := BuildPath(instance.HostOrigin, path, params)
 	return MakePostFormRequest(fullPath, data, instance.Headers(), parseJson)
 }
 
-func (instance *HttpClient) GetJson(
+func (instance *HttpClient) Get(
 	path string,
 	params Headers,
 	parseJson bool,
-) (any, error) {
+) (any, int, error) {
 	fullPath := BuildPath(instance.HostOrigin, path, params)
-	return MakeGetJsonRequest(fullPath, instance.Headers(), parseJson)
+	return MakeGetRequest(fullPath, instance.Headers(), parseJson)
 }
 
 func applyHeaders(req *http.Request, headers Headers) {
@@ -238,32 +240,32 @@ func mergeHeaders(headers Headers, defaults Headers) Headers {
 	return merged
 }
 
-func doAndDecodeRequest(req *http.Request, parseJson bool) (any, error) {
+func doAndDecodeRequest(req *http.Request, parseJson bool) (any, int, error) {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, NO_STATUS_CODE, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, resp.StatusCode, err
 	}
 
 	if !parseJson {
-		return body, nil
+		return body, resp.StatusCode, nil
 	}
 
 	if len(body) == 0 {
-		return nil, nil
+		return nil, resp.StatusCode, nil
 	}
 
 	var result any
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON response: %w", err)
+		return body, resp.StatusCode, fmt.Errorf("failed to decode JSON response: %w", err)
 	}
 
-	return result, nil
+	return result, resp.StatusCode, nil
 }
 
 // Websocket client
